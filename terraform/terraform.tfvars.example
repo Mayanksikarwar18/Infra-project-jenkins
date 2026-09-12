@@ -1,0 +1,27 @@
+# Azure Infrastructure Sample Variables
+environment                 = "dev"
+location                    = "eastus"
+resource_group_name         = "rg-infra-dev"
+vnet_name                   = "vnet-infra-dev"
+vnet_address_space          = ["10.0.0.0/16"]
+subnet_name                 = "snet-workload-dev"
+subnet_address_prefixes     = ["10.0.1.0/24"]
+storage_account_name_prefix = "stinfra"
+storage_account_tier        = "Standard"
+storage_account_replication_type = "LRS"
+
+# Linux VM Configuration
+vm_name        = "vm-linux-dev"
+vm_size        = "Standard_B2s"
+admin_username = "azureuser"
+# Provide a strong password (minimum 12 chars, upper, lower, number, special char):
+admin_password = "P@ssw0rdSecure2026!"
+
+# Network Security: Restrict SSH to your trusted IP CIDR (e.g., "203.0.113.50/32")
+ssh_allowed_source_ip = "*"
+
+tags = {
+  Environment = "Development"
+  ManagedBy   = "Terraform"
+  Project     = "Azure-DevOps-Infra"
+}

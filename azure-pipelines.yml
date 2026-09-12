@@ -1,0 +1,253 @@
+name: $(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+  paths:
+    include:
+      - terraform/**
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - terraform/**
+
+# Allow manual pipeline dispatch from the Azure DevOps UI
+parameters:
+  - name: environment
+    displayName: 'Target Environment'
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - staging
+      - prod
+  - name: action
+    displayName: 'Terraform Action'
+    type: string
+    default: 'apply'
+    values:
+      - apply
+      - destroy
+
+# Variable group storing Azure Service Principal credentials
+# Variables expected in the group:
+# - ARM_CLIENT_ID
+# - ARM_CLIENT_SECRET
+# - ARM_TENANT_ID
+# - ARM_SUBSCRIPTION_ID
+# - TF_VAR_admin_password
+variables:
+  - group: azure-sp-credentials
+  - name: terraformWorkingDirectory
+    value: '$(System.DefaultWorkingDirectory)/terraform'
+  - name: terraformVersion
+    value: '1.5.7'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  # ==============================================================================
+  # STAGE 1: BUILD (Lint, Init, Validate, and Generate Plan)
+  # ==============================================================================
+  - stage: Build
+    displayName: 'Stage: Build & Plan'
+    jobs:
+      - job: TerraformBuild
+        displayName: 'Lint, Validate & Generate tfplan'
+        steps:
+          # Install Terraform
+          - task: UseTerraform@0
+            displayName: 'Install Terraform CLI'
+            inputs:
+              version: $(terraformVersion)
+
+          # Verify Terraform formatting
+          - script: |
+              echo "==> Checking Terraform code formatting..."
+              terraform fmt -check -diff
+            displayName: 'Terraform Format Check'
+            workingDirectory: $(terraformWorkingDirectory)
+
+          # Terraform Init
+          - script: |
+              echo "==> Initializing Terraform..."
+              terraform init
+            displayName: 'Terraform Init'
+            workingDirectory: $(terraformWorkingDirectory)
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+
+          # Terraform Validate
+          - script: |
+              echo "==> Validating Terraform configuration syntax..."
+              terraform validate
+            displayName: 'Terraform Validate'
+            workingDirectory: $(terraformWorkingDirectory)
+
+          # Terraform Plan
+          - script: |
+              echo "==> Generating Terraform execution plan for environment: ${{ parameters.environment }}..."
+              terraform plan \
+                -var-file="environments/${{ parameters.environment }}.tfvars" \
+                -out="$(Build.ArtifactStagingDirectory)/tfplan" \
+                -detailed-exitcode
+            displayName: 'Terraform Plan'
+            workingDirectory: $(terraformWorkingDirectory)
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              TF_VAR_admin_password: $(TF_VAR_admin_password)
+
+          # Archive code and plan for subsequent stages
+          - task: CopyFiles@2
+            displayName: 'Stage Terraform Files'
+            inputs:
+              SourceFolder: '$(terraformWorkingDirectory)'
+              Contents: |
+                **/*
+                !**/.terraform/**
+              TargetFolder: '$(Build.ArtifactStagingDirectory)/tfcode'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Plan & Code Artifact'
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+              artifact: 'terraform-drop'
+              publishLocation: 'pipeline'
+
+  # ==============================================================================
+  # STAGE 2: TEST (Static Analysis, Security Scanning & Plan Verification)
+  # ==============================================================================
+  - stage: Test
+    displayName: 'Stage: Test & Security Scan'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: TerraformTest
+        displayName: 'Scan Infrastructure & Test Plan'
+        steps:
+          - download: current
+            artifact: 'terraform-drop'
+
+          - task: UseTerraform@0
+            displayName: 'Install Terraform CLI'
+            inputs:
+              version: $(terraformVersion)
+
+          # Run automated plan inspection test
+          - script: |
+              echo "==> Inspecting tfplan artifact integrity..."
+              cd $(Pipeline.Workspace)/terraform-drop/tfcode
+              terraform init -backend=false
+              
+              echo "==> Exporting human-readable plan summary..."
+              terraform show $(Pipeline.Workspace)/terraform-drop/tfplan > $(Pipeline.Workspace)/plan-summary.txt
+              head -n 50 $(Pipeline.Workspace)/plan-summary.txt
+
+              echo "==> Running Security & Compliance Checks on modules..."
+              # Verify that HTTPS is enforced on the storage module
+              grep -q "https_traffic_only_enabled = true" modules/storage/main.tf || { echo "ERROR: Storage module must enforce HTTPS"; exit 1; }
+              # Verify TLS 1.2 minimum on storage module
+              grep -q 'min_tls_version          = "TLS1_2"' modules/storage/main.tf || { echo "ERROR: Storage module must enforce TLS 1.2"; exit 1; }
+              # Verify SSH NSG rule exists in compute module
+              grep -q "Allow-SSH" modules/compute/main.tf || { echo "ERROR: SSH rule not configured in compute module"; exit 1; }
+              # Verify NAT Gateway exists in network module
+              grep -q "azurerm_nat_gateway" modules/network/main.tf || { echo "ERROR: NAT Gateway not configured in network module"; exit 1; }
+              # Verify parent main.tf orchestrates all 3 child modules
+              grep -q 'module "network"' main.tf || { echo "ERROR: Network module not invoked"; exit 1; }
+              grep -q 'module "compute"' main.tf || { echo "ERROR: Compute module not invoked"; exit 1; }
+              grep -q 'module "storage"' main.tf || { echo "ERROR: Storage module not invoked"; exit 1; }
+
+              echo "==> All automated policy tests PASSED successfully."
+            displayName: 'Policy & Security Tests'
+            workingDirectory: $(Pipeline.Workspace)/terraform-drop/tfcode
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Plan Summary'
+            inputs:
+              targetPath: '$(Pipeline.Workspace)/plan-summary.txt'
+              artifact: 'plan-summary'
+              publishLocation: 'pipeline'
+
+  # ==============================================================================
+  # STAGE 3: DEPLOY (Apply Provisioning to Azure)
+  # ==============================================================================
+  - stage: Deploy
+    displayName: 'Stage: Deploy Infrastructure'
+    dependsOn: Test
+    # Only deploy on main branch commits or manual dispatch
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.Reason'], 'Manual')))
+    jobs:
+      - deployment: TerraformApply
+        displayName: 'Apply Terraform Changes'
+        # Environment enables approvals, gates, and deployment history tracking in ADO
+        environment: 'infra-${{ parameters.environment }}'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: 'terraform-drop'
+
+                - task: UseTerraform@0
+                  displayName: 'Install Terraform CLI'
+                  inputs:
+                    version: $(terraformVersion)
+
+                - script: |
+                    echo "==> Initializing Terraform with remote state..."
+                    cd $(Pipeline.Workspace)/terraform-drop/tfcode
+                    terraform init
+                  displayName: 'Terraform Init'
+                  env:
+                    ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                    ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                    ARM_TENANT_ID: $(ARM_TENANT_ID)
+                    ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+
+                - script: |
+                    cd $(Pipeline.Workspace)/terraform-drop/tfcode
+                    if [ "${{ parameters.action }}" == "destroy" ]; then
+                      echo "==> Executing Terraform Destroy..."
+                      terraform destroy \
+                        -var-file="environments/${{ parameters.environment }}.tfvars" \
+                        -auto-approve
+                    else
+                      echo "==> Applying validated Terraform plan..."
+                      terraform apply \
+                        -auto-approve \
+                        "$(Pipeline.Workspace)/terraform-drop/tfplan"
+                    fi
+                  displayName: 'Terraform Apply / Action'
+                  env:
+                    ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                    ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                    ARM_TENANT_ID: $(ARM_TENANT_ID)
+                    ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+                    TF_VAR_admin_password: $(TF_VAR_admin_password)
+
+                - script: |
+                    cd $(Pipeline.Workspace)/terraform-drop/tfcode
+                    echo "=========================================================="
+                    echo "         INFRASTRUCTURE PROVISIONING SUMMARY              "
+                    echo "=========================================================="
+                    terraform output
+                    echo "=========================================================="
+                  displayName: 'Print Deployment Outputs'
+                  env:
+                    ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                    ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                    ARM_TENANT_ID: $(ARM_TENANT_ID)
+                    ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
