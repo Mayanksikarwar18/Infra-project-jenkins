@@ -16,7 +16,9 @@ crash.*.log
 
 # Exception: allow example or non-sensitive sample files
 !terraform.tfvars.example
-!environments/dev.tfvars
+!terraform/terraform.tfvars.example
+!terraform/environments/*.tfvars
+!environments/*.tfvars
 
 # Ignore override files
 override.tf
