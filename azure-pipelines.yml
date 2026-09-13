@@ -50,7 +50,7 @@ variables:
     value: '1.5.7'
 
 pool:
-  vmImage: 'ubuntu-latest'
+  name: 'Default'
 
 stages:
   # ==============================================================================
