@@ -7,7 +7,7 @@ variable "environment" {
 variable "location" {
   type        = string
   description = "Azure region where all resources will be provisioned"
-  default     = "eastus"
+  default     = "centralindia"
 }
 
 variable "resource_group_name" {
@@ -67,7 +67,7 @@ variable "vm_name" {
 variable "vm_size" {
   type        = string
   description = "Azure VM SKU size"
-  default     = "Standard_B2s"
+  default     = "Standard_B2as_v2"
 }
 
 variable "admin_username" {

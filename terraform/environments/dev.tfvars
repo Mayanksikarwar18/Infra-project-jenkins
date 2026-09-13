@@ -1,6 +1,6 @@
 # Environment: Development
 environment                      = "dev"
-location                         = "eastus"
+location                         = "centralindia"
 resource_group_name              = "rg-infra-dev"
 vnet_name                        = "vnet-infra-dev"
 vnet_address_space               = ["10.0.0.0/16"]
@@ -12,7 +12,7 @@ storage_account_replication_type = "LRS"
 
 # Linux VM Specifications
 vm_name        = "vm-linux-dev"
-vm_size        = "Standard_B2s"
+vm_size        = "Standard_B2as_v2"
 admin_username = "azureuser"
 
 # Note: In Azure DevOps CI/CD, admin_password is best injected via secret pipeline variable:

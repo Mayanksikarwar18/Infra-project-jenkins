@@ -1,6 +1,6 @@
 # Environment: Staging
 environment                      = "staging"
-location                         = "eastus"
+location                         = "centralindia"
 resource_group_name              = "rg-infra-staging"
 vnet_name                        = "vnet-infra-staging"
 vnet_address_space               = ["10.1.0.0/16"]
@@ -12,7 +12,7 @@ storage_account_replication_type = "LRS"
 
 # Linux VM Specifications
 vm_name        = "vm-linux-staging"
-vm_size        = "Standard_B2s"
+vm_size        = "Standard_B2as_v2"
 admin_username = "azureuser"
 admin_password = "P@ssw0rdStaging2026!"
 

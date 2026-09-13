@@ -1,6 +1,6 @@
 # Azure Infrastructure Sample Variables
 environment                 = "dev"
-location                    = "eastus"
+location                    = "centralindia"
 resource_group_name         = "rg-infra-dev"
 vnet_name                   = "vnet-infra-dev"
 vnet_address_space          = ["10.0.0.0/16"]
@@ -12,7 +12,7 @@ storage_account_replication_type = "LRS"
 
 # Linux VM Configuration
 vm_name        = "vm-linux-dev"
-vm_size        = "Standard_B2s"
+vm_size        = "Standard_B2as_v2"
 admin_username = "azureuser"
 # Provide a strong password (minimum 12 chars, upper, lower, number, special char):
 admin_password = "P@ssw0rdSecure2026!"
