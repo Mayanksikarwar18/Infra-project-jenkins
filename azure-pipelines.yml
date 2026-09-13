@@ -167,9 +167,9 @@ stages:
 
               echo "==> Running Security & Compliance Checks on modules..."
               # Verify that HTTPS is enforced on the storage module
-              grep -q "https_traffic_only_enabled = true" modules/storage/main.tf || { echo "ERROR: Storage module must enforce HTTPS"; exit 1; }
+              grep -q -E 'https_traffic_only_enabled[[:space:]]*=[[:space:]]*true' modules/storage/main.tf || { echo "ERROR: Storage module must enforce HTTPS"; exit 1; }
               # Verify TLS 1.2 minimum on storage module
-              grep -q 'min_tls_version          = "TLS1_2"' modules/storage/main.tf || { echo "ERROR: Storage module must enforce TLS 1.2"; exit 1; }
+              grep -q -E 'min_tls_version[[:space:]]*=[[:space:]]*"TLS1_2"' modules/storage/main.tf || { echo "ERROR: Storage module must enforce TLS 1.2"; exit 1; }
               # Verify SSH NSG rule exists in compute module
               grep -q "Allow-SSH" modules/compute/main.tf || { echo "ERROR: SSH rule not configured in compute module"; exit 1; }
               # Verify NAT Gateway exists in network module
