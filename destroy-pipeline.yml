@@ -41,32 +41,36 @@ stages:
         displayName: 'Generate & Inspect Destroy Plan'
         steps:
           # Safety confirmation guard
-          - bash: |
-              echo "=========================================================="
-              echo "               DESTROY CONFIRMATION CHECK                 "
-              echo "=========================================================="
-              if [ "${{ parameters.confirm }}" != "DESTROY" ]; then
-                echo "ERROR: Destruction aborted! Confirmation was '${{ parameters.confirm }}', expected 'DESTROY'."
-                exit 1
-              fi
-              echo "Target Environment: ${{ parameters.environment }}"
-              echo "Confirmation: DESTROY accepted."
-              echo "=========================================================="
+          - powershell: |
+              $confirm = "${{ parameters.confirm }}"
+              $env = "${{ parameters.environment }}"
+              Write-Host "=========================================================="
+              Write-Host "               DESTROY CONFIRMATION CHECK                 "
+              Write-Host "=========================================================="
+              if ($confirm -ne "DESTROY") {
+                  Write-Error "ERROR: Destruction aborted! Confirmation was '$confirm', expected 'DESTROY'."
+                  exit 1
+              }
+              Write-Host "Target Environment: $env"
+              Write-Host "Confirmation: DESTROY accepted."
+              Write-Host "=========================================================="
             displayName: 'Safety Guard Check'
 
           # Verify Terraform CLI
-          - bash: |
-              if ! command -v terraform &> /dev/null; then
-                echo "ERROR: Terraform CLI not found in PATH on agent. Please ensure Terraform is installed."
-                exit 1
-              fi
+          - powershell: |
+              Write-Host "==> Verifying Terraform CLI installation..."
+              if (-not (Get-Command terraform -ErrorAction SilentlyContinue)) {
+                  Write-Error "ERROR: Terraform CLI not found in PATH on agent. Please ensure Terraform is installed."
+                  exit 1
+              }
               terraform version
             displayName: 'Verify Terraform CLI'
 
           # Terraform Init
-          - bash: |
-              echo "==> Initializing Terraform with remote backend..."
+          - powershell: |
+              Write-Host "==> Initializing Terraform with remote backend..."
               terraform init
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             displayName: 'Terraform Init'
             workingDirectory: $(terraformWorkingDirectory)
             env:
@@ -76,12 +80,11 @@ stages:
               ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
 
           # Generate Destroy Plan
-          - bash: |
-              echo "==> Generating Terraform destroy plan for environment: ${{ parameters.environment }}..."
-              terraform plan \
-                -destroy \
-                -var-file="environments/${{ parameters.environment }}.tfvars" \
-                -out="$(Build.ArtifactStagingDirectory)/destroy.tfplan"
+          - powershell: |
+              Write-Host "==> Generating Terraform destroy plan for environment: ${{ parameters.environment }}..."
+              $destroyPlan = Join-Path "$(Build.ArtifactStagingDirectory)" "destroy.tfplan"
+              terraform plan -destroy -var-file="environments/${{ parameters.environment }}.tfvars" -out="$destroyPlan"
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             displayName: 'Generate Destroy Plan'
             workingDirectory: $(terraformWorkingDirectory)
             env:
@@ -92,10 +95,12 @@ stages:
               TF_VAR_admin_password: $(TF_VAR_admin_password)
 
           # Display plan preview
-          - bash: |
-              echo "==> Human-readable preview of resources to be destroyed:"
-              terraform show "$(Build.ArtifactStagingDirectory)/destroy.tfplan" > "$(Build.ArtifactStagingDirectory)/destroy-summary.txt"
-              cat "$(Build.ArtifactStagingDirectory)/destroy-summary.txt" | head -n 100
+          - powershell: |
+              Write-Host "==> Preview of resources to be destroyed:"
+              $destroyPlan = Join-Path "$(Build.ArtifactStagingDirectory)" "destroy.tfplan"
+              $summaryPath = Join-Path "$(Build.ArtifactStagingDirectory)" "destroy-summary.txt"
+              terraform show "$destroyPlan" | Out-File -FilePath "$summaryPath" -Encoding utf8
+              Get-Content -Path "$summaryPath" -TotalCount 100
             displayName: 'Preview Destroy Summary'
             workingDirectory: $(terraformWorkingDirectory)
 
@@ -135,19 +140,21 @@ stages:
                   artifact: 'terraform-destroy-drop'
 
                 # Verify Terraform CLI
-                - bash: |
-                    if ! command -v terraform &> /dev/null; then
-                      echo "ERROR: Terraform CLI not found in PATH on agent."
-                      exit 1
-                    fi
+                - powershell: |
+                    if (-not (Get-Command terraform -ErrorAction SilentlyContinue)) {
+                        Write-Error "ERROR: Terraform CLI not found in PATH on agent."
+                        exit 1
+                    }
                     terraform version
                   displayName: 'Verify Terraform CLI'
 
                 # Initialize Terraform with remote state
-                - bash: |
-                    echo "==> Initializing Terraform with remote state..."
-                    cd "$(Pipeline.Workspace)/terraform-destroy-drop/tfcode"
+                - powershell: |
+                    $tfcodeDir = Join-Path "$(Pipeline.Workspace)" "terraform-destroy-drop/tfcode"
+                    Set-Location -Path "$tfcodeDir"
+                    Write-Host "==> Initializing Terraform with remote state..."
                     terraform init
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
                   displayName: 'Terraform Init'
                   env:
                     ARM_CLIENT_ID: $(ARM_CLIENT_ID)
@@ -156,17 +163,20 @@ stages:
                     ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
 
                 # Execute Destroy using compiled plan
-                - bash: |
-                    cd "$(Pipeline.Workspace)/terraform-destroy-drop/tfcode"
-                    echo "=========================================================="
-                    echo "        EXECUTING TERRAFORM INFRASTRUCTURE TEARDOWN        "
-                    echo "=========================================================="
-                    terraform apply \
-                      -auto-approve \
-                      "$(Pipeline.Workspace)/terraform-destroy-drop/destroy.tfplan"
-                    echo "=========================================================="
-                    echo "   TEARDOWN COMPLETE FOR ENVIRONMENT: ${{ parameters.environment }}   "
-                    echo "=========================================================="
+                - powershell: |
+                    $tfcodeDir = Join-Path "$(Pipeline.Workspace)" "terraform-destroy-drop/tfcode"
+                    Set-Location -Path "$tfcodeDir"
+                    $destroyPlan = Join-Path "$(Pipeline.Workspace)" "terraform-destroy-drop/destroy.tfplan"
+                    $env = "${{ parameters.environment }}"
+
+                    Write-Host "=========================================================="
+                    Write-Host "        EXECUTING TERRAFORM INFRASTRUCTURE TEARDOWN        "
+                    Write-Host "=========================================================="
+                    terraform apply -auto-approve "$destroyPlan"
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+                    Write-Host "=========================================================="
+                    Write-Host "   TEARDOWN COMPLETE FOR ENVIRONMENT: $env   "
+                    Write-Host "=========================================================="
                   displayName: 'Execute Terraform Destroy'
                   env:
                     ARM_CLIENT_ID: $(ARM_CLIENT_ID)

@@ -63,25 +63,31 @@ stages:
         displayName: 'Lint, Validate & Generate tfplan'
         steps:
           # Verify Terraform CLI
-          - bash: |
-              if ! command -v terraform &> /dev/null; then
-                echo "ERROR: Terraform CLI not found in PATH on agent. Please ensure Terraform is installed."
-                exit 1
-              fi
+          - powershell: |
+              Write-Host "==> Verifying Terraform CLI installation..."
+              if (-not (Get-Command terraform -ErrorAction SilentlyContinue)) {
+                  Write-Error "Terraform CLI not found in PATH on agent. Please ensure Terraform is installed."
+                  exit 1
+              }
               terraform version
             displayName: 'Verify Terraform CLI'
 
           # Verify Terraform formatting
-          - bash: |
-              echo "==> Checking Terraform code formatting..."
+          - powershell: |
+              Write-Host "==> Checking Terraform code formatting..."
               terraform fmt -check
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "Terraform files are not properly formatted. Run 'terraform fmt' to fix."
+                  exit $LASTEXITCODE
+              }
             displayName: 'Terraform Format Check'
             workingDirectory: $(terraformWorkingDirectory)
 
           # Terraform Init
-          - bash: |
-              echo "==> Initializing Terraform..."
+          - powershell: |
+              Write-Host "==> Initializing Terraform with remote backend..."
               terraform init
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             displayName: 'Terraform Init'
             workingDirectory: $(terraformWorkingDirectory)
             env:
@@ -91,18 +97,19 @@ stages:
               ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
 
           # Terraform Validate
-          - bash: |
-              echo "==> Validating Terraform configuration syntax..."
+          - powershell: |
+              Write-Host "==> Validating Terraform configuration syntax..."
               terraform validate
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             displayName: 'Terraform Validate'
             workingDirectory: $(terraformWorkingDirectory)
 
           # Terraform Plan
-          - bash: |
-              echo "==> Generating Terraform execution plan for environment: ${{ parameters.environment }}..."
-              terraform plan \
-                -var-file="environments/${{ parameters.environment }}.tfvars" \
-                -out="$(Build.ArtifactStagingDirectory)/tfplan"
+          - powershell: |
+              Write-Host "==> Generating Terraform execution plan for environment: ${{ parameters.environment }}..."
+              $planPath = Join-Path "$(Build.ArtifactStagingDirectory)" "tfplan"
+              terraform plan -var-file="environments/${{ parameters.environment }}.tfvars" -out="$planPath"
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             displayName: 'Terraform Plan'
             workingDirectory: $(terraformWorkingDirectory)
             env:
@@ -143,39 +150,75 @@ stages:
           - download: current
             artifact: 'terraform-drop'
 
-          - bash: |
-              if ! command -v terraform &> /dev/null; then
-                echo "ERROR: Terraform CLI not found in PATH on agent."
-                exit 1
-              fi
+          - powershell: |
+              if (-not (Get-Command terraform -ErrorAction SilentlyContinue)) {
+                  Write-Error "Terraform CLI not found in PATH on agent."
+                  exit 1
+              }
               terraform version
             displayName: 'Verify Terraform CLI'
 
-          # Run automated plan inspection test
-          - bash: |
-              echo "==> Inspecting tfplan artifact integrity..."
-              cd "$(Pipeline.Workspace)/terraform-drop/tfcode"
+          # Run automated plan inspection test and policy checks
+          - powershell: |
+              $dropDir = Join-Path "$(Pipeline.Workspace)" "terraform-drop"
+              $tfcodeDir = Join-Path "$dropDir" "tfcode"
+              Set-Location -Path "$tfcodeDir"
+
+              Write-Host "==> Inspecting tfplan artifact integrity..."
               terraform init -backend=false
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+              Write-Host "==> Exporting human-readable plan summary..."
+              $planPath = Join-Path "$dropDir" "tfplan"
+              $summaryPath = Join-Path "$(Pipeline.Workspace)" "plan-summary.txt"
+              terraform show "$planPath" | Out-File -FilePath "$summaryPath" -Encoding utf8
+              Get-Content -Path "$summaryPath" -TotalCount 50
+
+              Write-Host "==> Running Security & Compliance Checks on modules..."
               
-              echo "==> Exporting human-readable plan summary..."
-              terraform show "$(Pipeline.Workspace)/terraform-drop/tfplan" > "$(Pipeline.Workspace)/plan-summary.txt"
-              head -n 50 "$(Pipeline.Workspace)/plan-summary.txt"
+              # Verify HTTPS on storage module
+              $storageContent = Get-Content -Path "modules/storage/main.tf" -Raw
+              if ($storageContent -notmatch 'https_traffic_only_enabled\s*=\s*true') {
+                  Write-Error "ERROR: Storage module must enforce HTTPS"
+                  exit 1
+              }
 
-              echo "==> Running Security & Compliance Checks on modules..."
-              # Verify that HTTPS is enforced on the storage module
-              grep -q -E 'https_traffic_only_enabled[[:space:]]*=[[:space:]]*true' modules/storage/main.tf || { echo "ERROR: Storage module must enforce HTTPS"; exit 1; }
-              # Verify TLS 1.2 minimum on storage module
-              grep -q -E 'min_tls_version[[:space:]]*=[[:space:]]*"TLS1_2"' modules/storage/main.tf || { echo "ERROR: Storage module must enforce TLS 1.2"; exit 1; }
+              # Verify TLS 1.2 on storage module
+              if ($storageContent -notmatch 'min_tls_version\s*=\s*"TLS1_2"') {
+                  Write-Error "ERROR: Storage module must enforce TLS 1.2"
+                  exit 1
+              }
+
               # Verify SSH NSG rule exists in compute module
-              grep -q "Allow-SSH" modules/compute/main.tf || { echo "ERROR: SSH rule not configured in compute module"; exit 1; }
-              # Verify NAT Gateway exists in network module
-              grep -q "azurerm_nat_gateway" modules/network/main.tf || { echo "ERROR: NAT Gateway not configured in network module"; exit 1; }
-              # Verify parent main.tf orchestrates all 3 child modules
-              grep -q 'module "network"' main.tf || { echo "ERROR: Network module not invoked"; exit 1; }
-              grep -q 'module "compute"' main.tf || { echo "ERROR: Compute module not invoked"; exit 1; }
-              grep -q 'module "storage"' main.tf || { echo "ERROR: Storage module not invoked"; exit 1; }
+              $computeContent = Get-Content -Path "modules/compute/main.tf" -Raw
+              if ($computeContent -notmatch 'Allow-SSH') {
+                  Write-Error "ERROR: SSH rule not configured in compute module"
+                  exit 1
+              }
 
-              echo "==> All automated policy tests PASSED successfully."
+              # Verify NAT Gateway exists in network module
+              $networkContent = Get-Content -Path "modules/network/main.tf" -Raw
+              if ($networkContent -notmatch 'azurerm_nat_gateway') {
+                  Write-Error "ERROR: NAT Gateway not configured in network module"
+                  exit 1
+              }
+
+              # Verify parent main.tf orchestrates all 3 child modules
+              $mainContent = Get-Content -Path "main.tf" -Raw
+              if ($mainContent -notmatch 'module\s+"network"') {
+                  Write-Error "ERROR: Network module not invoked in main.tf"
+                  exit 1
+              }
+              if ($mainContent -notmatch 'module\s+"compute"') {
+                  Write-Error "ERROR: Compute module not invoked in main.tf"
+                  exit 1
+              }
+              if ($mainContent -notmatch 'module\s+"storage"') {
+                  Write-Error "ERROR: Storage module not invoked in main.tf"
+                  exit 1
+              }
+
+              Write-Host "==> All automated policy tests PASSED successfully."
             displayName: 'Policy & Security Tests'
             workingDirectory: $(Pipeline.Workspace)/terraform-drop/tfcode
 
@@ -192,7 +235,7 @@ stages:
   - stage: Deploy
     displayName: 'Stage: Deploy Infrastructure'
     dependsOn: Test
-    # Only deploy on main branch commits or manual dispatch
+    # Only deploy on master branch commits or manual dispatch
     condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/master'), eq(variables['Build.Reason'], 'Manual')))
     jobs:
       - deployment: TerraformApply
@@ -206,18 +249,20 @@ stages:
                 - download: current
                   artifact: 'terraform-drop'
 
-                - bash: |
-                    if ! command -v terraform &> /dev/null; then
-                      echo "ERROR: Terraform CLI not found in PATH on agent."
-                      exit 1
-                    fi
+                - powershell: |
+                    if (-not (Get-Command terraform -ErrorAction SilentlyContinue)) {
+                        Write-Error "Terraform CLI not found in PATH on agent."
+                        exit 1
+                    }
                     terraform version
                   displayName: 'Verify Terraform CLI'
 
-                - bash: |
-                    echo "==> Initializing Terraform with remote state..."
-                    cd "$(Pipeline.Workspace)/terraform-drop/tfcode"
+                - powershell: |
+                    $tfcodeDir = Join-Path "$(Pipeline.Workspace)" "terraform-drop/tfcode"
+                    Set-Location -Path "$tfcodeDir"
+                    Write-Host "==> Initializing Terraform with remote state..."
                     terraform init
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
                   displayName: 'Terraform Init'
                   env:
                     ARM_CLIENT_ID: $(ARM_CLIENT_ID)
@@ -225,19 +270,21 @@ stages:
                     ARM_TENANT_ID: $(ARM_TENANT_ID)
                     ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
 
-                - bash: |
-                    cd "$(Pipeline.Workspace)/terraform-drop/tfcode"
-                    if [ "${{ parameters.action }}" == "destroy" ]; then
-                      echo "==> Executing Terraform Destroy..."
-                      terraform destroy \
-                        -var-file="environments/${{ parameters.environment }}.tfvars" \
-                        -auto-approve
-                    else
-                      echo "==> Applying validated Terraform plan..."
-                      terraform apply \
-                        -auto-approve \
-                        "$(Pipeline.Workspace)/terraform-drop/tfplan"
-                    fi
+                - powershell: |
+                    $tfcodeDir = Join-Path "$(Pipeline.Workspace)" "terraform-drop/tfcode"
+                    Set-Location -Path "$tfcodeDir"
+                    $action = "${{ parameters.action }}"
+                    $env = "${{ parameters.environment }}"
+                    $planPath = Join-Path "$(Pipeline.Workspace)" "terraform-drop/tfplan"
+
+                    if ($action -eq "destroy") {
+                        Write-Host "==> Executing Terraform Destroy for environment: $env..."
+                        terraform destroy -var-file="environments/$env.tfvars" -auto-approve
+                    } else {
+                        Write-Host "==> Applying validated Terraform plan for environment: $env..."
+                        terraform apply -auto-approve "$planPath"
+                    }
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
                   displayName: 'Terraform Apply / Action'
                   env:
                     ARM_CLIENT_ID: $(ARM_CLIENT_ID)
@@ -246,13 +293,14 @@ stages:
                     ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
                     TF_VAR_admin_password: $(TF_VAR_admin_password)
 
-                - bash: |
-                    cd "$(Pipeline.Workspace)/terraform-drop/tfcode"
-                    echo "=========================================================="
-                    echo "         INFRASTRUCTURE PROVISIONING SUMMARY              "
-                    echo "=========================================================="
+                - powershell: |
+                    $tfcodeDir = Join-Path "$(Pipeline.Workspace)" "terraform-drop/tfcode"
+                    Set-Location -Path "$tfcodeDir"
+                    Write-Host "=========================================================="
+                    Write-Host "         INFRASTRUCTURE PROVISIONING SUMMARY              "
+                    Write-Host "=========================================================="
                     terraform output
-                    echo "=========================================================="
+                    Write-Host "=========================================================="
                   displayName: 'Print Deployment Outputs'
                   env:
                     ARM_CLIENT_ID: $(ARM_CLIENT_ID)
