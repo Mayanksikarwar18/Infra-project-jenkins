@@ -62,26 +62,24 @@ stages:
       - job: TerraformBuild
         displayName: 'Lint, Validate & Generate tfplan'
         steps:
-          # Install Terraform
-          - script: |
-              if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
-                echo "==> Downloading Terraform $(terraformVersion)..."
-                curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
-                sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
-                rm -f /tmp/terraform.zip
+          # Verify Terraform CLI
+          - bash: |
+              if ! command -v terraform &> /dev/null; then
+                echo "ERROR: Terraform CLI not found in PATH on agent. Please ensure Terraform is installed."
+                exit 1
               fi
               terraform version
-            displayName: 'Install Terraform CLI'
+            displayName: 'Verify Terraform CLI'
 
           # Verify Terraform formatting
-          - script: |
+          - bash: |
               echo "==> Checking Terraform code formatting..."
-              terraform fmt -check -diff
+              terraform fmt -check
             displayName: 'Terraform Format Check'
             workingDirectory: $(terraformWorkingDirectory)
 
           # Terraform Init
-          - script: |
+          - bash: |
               echo "==> Initializing Terraform..."
               terraform init
             displayName: 'Terraform Init'
@@ -93,14 +91,14 @@ stages:
               ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
 
           # Terraform Validate
-          - script: |
+          - bash: |
               echo "==> Validating Terraform configuration syntax..."
               terraform validate
             displayName: 'Terraform Validate'
             workingDirectory: $(terraformWorkingDirectory)
 
           # Terraform Plan
-          - script: |
+          - bash: |
               echo "==> Generating Terraform execution plan for environment: ${{ parameters.environment }}..."
               terraform plan \
                 -var-file="environments/${{ parameters.environment }}.tfvars" \
@@ -145,25 +143,23 @@ stages:
           - download: current
             artifact: 'terraform-drop'
 
-          - script: |
-              if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
-                echo "==> Downloading Terraform $(terraformVersion)..."
-                curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
-                sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
-                rm -f /tmp/terraform.zip
+          - bash: |
+              if ! command -v terraform &> /dev/null; then
+                echo "ERROR: Terraform CLI not found in PATH on agent."
+                exit 1
               fi
               terraform version
-            displayName: 'Install Terraform CLI'
+            displayName: 'Verify Terraform CLI'
 
           # Run automated plan inspection test
-          - script: |
+          - bash: |
               echo "==> Inspecting tfplan artifact integrity..."
-              cd $(Pipeline.Workspace)/terraform-drop/tfcode
+              cd "$(Pipeline.Workspace)/terraform-drop/tfcode"
               terraform init -backend=false
               
               echo "==> Exporting human-readable plan summary..."
-              terraform show $(Pipeline.Workspace)/terraform-drop/tfplan > $(Pipeline.Workspace)/plan-summary.txt
-              head -n 50 $(Pipeline.Workspace)/plan-summary.txt
+              terraform show "$(Pipeline.Workspace)/terraform-drop/tfplan" > "$(Pipeline.Workspace)/plan-summary.txt"
+              head -n 50 "$(Pipeline.Workspace)/plan-summary.txt"
 
               echo "==> Running Security & Compliance Checks on modules..."
               # Verify that HTTPS is enforced on the storage module
@@ -210,19 +206,17 @@ stages:
                 - download: current
                   artifact: 'terraform-drop'
 
-                - script: |
-                    if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
-                      echo "==> Downloading Terraform $(terraformVersion)..."
-                      curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
-                      sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
-                      rm -f /tmp/terraform.zip
+                - bash: |
+                    if ! command -v terraform &> /dev/null; then
+                      echo "ERROR: Terraform CLI not found in PATH on agent."
+                      exit 1
                     fi
                     terraform version
-                  displayName: 'Install Terraform CLI'
+                  displayName: 'Verify Terraform CLI'
 
-                - script: |
+                - bash: |
                     echo "==> Initializing Terraform with remote state..."
-                    cd $(Pipeline.Workspace)/terraform-drop/tfcode
+                    cd "$(Pipeline.Workspace)/terraform-drop/tfcode"
                     terraform init
                   displayName: 'Terraform Init'
                   env:
@@ -231,8 +225,8 @@ stages:
                     ARM_TENANT_ID: $(ARM_TENANT_ID)
                     ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
 
-                - script: |
-                    cd $(Pipeline.Workspace)/terraform-drop/tfcode
+                - bash: |
+                    cd "$(Pipeline.Workspace)/terraform-drop/tfcode"
                     if [ "${{ parameters.action }}" == "destroy" ]; then
                       echo "==> Executing Terraform Destroy..."
                       terraform destroy \
@@ -252,8 +246,8 @@ stages:
                     ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
                     TF_VAR_admin_password: $(TF_VAR_admin_password)
 
-                - script: |
-                    cd $(Pipeline.Workspace)/terraform-drop/tfcode
+                - bash: |
+                    cd "$(Pipeline.Workspace)/terraform-drop/tfcode"
                     echo "=========================================================="
                     echo "         INFRASTRUCTURE PROVISIONING SUMMARY              "
                     echo "=========================================================="

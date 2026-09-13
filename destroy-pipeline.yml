@@ -41,7 +41,7 @@ stages:
         displayName: 'Generate & Inspect Destroy Plan'
         steps:
           # Safety confirmation guard
-          - script: |
+          - bash: |
               echo "=========================================================="
               echo "               DESTROY CONFIRMATION CHECK                 "
               echo "=========================================================="
@@ -54,19 +54,17 @@ stages:
               echo "=========================================================="
             displayName: 'Safety Guard Check'
 
-          # Install Terraform CLI
-          - script: |
-              if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
-                echo "==> Downloading Terraform $(terraformVersion)..."
-                curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
-                sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
-                rm -f /tmp/terraform.zip
+          # Verify Terraform CLI
+          - bash: |
+              if ! command -v terraform &> /dev/null; then
+                echo "ERROR: Terraform CLI not found in PATH on agent. Please ensure Terraform is installed."
+                exit 1
               fi
               terraform version
-            displayName: 'Install Terraform CLI'
+            displayName: 'Verify Terraform CLI'
 
           # Terraform Init
-          - script: |
+          - bash: |
               echo "==> Initializing Terraform with remote backend..."
               terraform init
             displayName: 'Terraform Init'
@@ -78,7 +76,7 @@ stages:
               ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
 
           # Generate Destroy Plan
-          - script: |
+          - bash: |
               echo "==> Generating Terraform destroy plan for environment: ${{ parameters.environment }}..."
               terraform plan \
                 -destroy \
@@ -94,7 +92,7 @@ stages:
               TF_VAR_admin_password: $(TF_VAR_admin_password)
 
           # Display plan preview
-          - script: |
+          - bash: |
               echo "==> Human-readable preview of resources to be destroyed:"
               terraform show "$(Build.ArtifactStagingDirectory)/destroy.tfplan" > "$(Build.ArtifactStagingDirectory)/destroy-summary.txt"
               cat "$(Build.ArtifactStagingDirectory)/destroy-summary.txt" | head -n 100
@@ -136,21 +134,19 @@ stages:
                 - download: current
                   artifact: 'terraform-destroy-drop'
 
-                # Install Terraform CLI
-                - script: |
-                    if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
-                      echo "==> Downloading Terraform $(terraformVersion)..."
-                      curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
-                      sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
-                      rm -f /tmp/terraform.zip
+                # Verify Terraform CLI
+                - bash: |
+                    if ! command -v terraform &> /dev/null; then
+                      echo "ERROR: Terraform CLI not found in PATH on agent."
+                      exit 1
                     fi
                     terraform version
-                  displayName: 'Install Terraform CLI'
+                  displayName: 'Verify Terraform CLI'
 
                 # Initialize Terraform with remote state
-                - script: |
+                - bash: |
                     echo "==> Initializing Terraform with remote state..."
-                    cd $(Pipeline.Workspace)/terraform-destroy-drop/tfcode
+                    cd "$(Pipeline.Workspace)/terraform-destroy-drop/tfcode"
                     terraform init
                   displayName: 'Terraform Init'
                   env:
@@ -160,8 +156,8 @@ stages:
                     ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
 
                 # Execute Destroy using compiled plan
-                - script: |
-                    cd $(Pipeline.Workspace)/terraform-destroy-drop/tfcode
+                - bash: |
+                    cd "$(Pipeline.Workspace)/terraform-destroy-drop/tfcode"
                     echo "=========================================================="
                     echo "        EXECUTING TERRAFORM INFRASTRUCTURE TEARDOWN        "
                     echo "=========================================================="
