@@ -104,8 +104,7 @@ stages:
               echo "==> Generating Terraform execution plan for environment: ${{ parameters.environment }}..."
               terraform plan \
                 -var-file="environments/${{ parameters.environment }}.tfvars" \
-                -out="$(Build.ArtifactStagingDirectory)/tfplan" \
-                -detailed-exitcode
+                -out="$(Build.ArtifactStagingDirectory)/tfplan"
             displayName: 'Terraform Plan'
             workingDirectory: $(terraformWorkingDirectory)
             env:
