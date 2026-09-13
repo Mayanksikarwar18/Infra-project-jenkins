@@ -63,10 +63,15 @@ stages:
         displayName: 'Lint, Validate & Generate tfplan'
         steps:
           # Install Terraform
-          - task: UseTerraform@0
+          - script: |
+              if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
+                echo "==> Downloading Terraform $(terraformVersion)..."
+                curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
+                sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
+                rm -f /tmp/terraform.zip
+              fi
+              terraform version
             displayName: 'Install Terraform CLI'
-            inputs:
-              version: $(terraformVersion)
 
           # Verify Terraform formatting
           - script: |
@@ -141,10 +146,15 @@ stages:
           - download: current
             artifact: 'terraform-drop'
 
-          - task: UseTerraform@0
+          - script: |
+              if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
+                echo "==> Downloading Terraform $(terraformVersion)..."
+                curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
+                sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
+                rm -f /tmp/terraform.zip
+              fi
+              terraform version
             displayName: 'Install Terraform CLI'
-            inputs:
-              version: $(terraformVersion)
 
           # Run automated plan inspection test
           - script: |
@@ -201,10 +211,15 @@ stages:
                 - download: current
                   artifact: 'terraform-drop'
 
-                - task: UseTerraform@0
+                - script: |
+                    if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
+                      echo "==> Downloading Terraform $(terraformVersion)..."
+                      curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
+                      sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
+                      rm -f /tmp/terraform.zip
+                    fi
+                    terraform version
                   displayName: 'Install Terraform CLI'
-                  inputs:
-                    version: $(terraformVersion)
 
                 - script: |
                     echo "==> Initializing Terraform with remote state..."
