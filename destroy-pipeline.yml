@@ -1,0 +1,180 @@
+name: Destroy-$(Date:yyyyMMdd)$(Rev:.r)
+
+# Never run automatically on push or PR
+trigger: none
+pr: none
+
+# Manual execution parameters
+parameters:
+  - name: environment
+    displayName: 'Target Environment to Destroy'
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - staging
+      - prod
+  - name: confirm
+    displayName: 'Safety Confirmation (Type "DESTROY" to execute)'
+    type: string
+    default: 'DESTROY'
+
+# Variable group storing Azure Service Principal credentials
+variables:
+  - group: azure-sp-credentials
+  - name: terraformWorkingDirectory
+    value: '$(System.DefaultWorkingDirectory)/terraform'
+  - name: terraformVersion
+    value: '1.5.7'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+  # ==============================================================================
+  # STAGE 1: PLAN DESTROY (Generate and inspect destroy plan)
+  # ==============================================================================
+  - stage: DestroyPlan
+    displayName: 'Stage: Plan Destroy'
+    jobs:
+      - job: TerraformDestroyPlan
+        displayName: 'Generate & Inspect Destroy Plan'
+        steps:
+          # Safety confirmation guard
+          - script: |
+              echo "=========================================================="
+              echo "               DESTROY CONFIRMATION CHECK                 "
+              echo "=========================================================="
+              if [ "${{ parameters.confirm }}" != "DESTROY" ]; then
+                echo "ERROR: Destruction aborted! Confirmation was '${{ parameters.confirm }}', expected 'DESTROY'."
+                exit 1
+              fi
+              echo "Target Environment: ${{ parameters.environment }}"
+              echo "Confirmation: DESTROY accepted."
+              echo "=========================================================="
+            displayName: 'Safety Guard Check'
+
+          # Install Terraform CLI
+          - script: |
+              if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
+                echo "==> Downloading Terraform $(terraformVersion)..."
+                curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
+                sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
+                rm -f /tmp/terraform.zip
+              fi
+              terraform version
+            displayName: 'Install Terraform CLI'
+
+          # Terraform Init
+          - script: |
+              echo "==> Initializing Terraform with remote backend..."
+              terraform init
+            displayName: 'Terraform Init'
+            workingDirectory: $(terraformWorkingDirectory)
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+
+          # Generate Destroy Plan
+          - script: |
+              echo "==> Generating Terraform destroy plan for environment: ${{ parameters.environment }}..."
+              terraform plan \
+                -destroy \
+                -var-file="environments/${{ parameters.environment }}.tfvars" \
+                -out="$(Build.ArtifactStagingDirectory)/destroy.tfplan"
+            displayName: 'Generate Destroy Plan'
+            workingDirectory: $(terraformWorkingDirectory)
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              TF_VAR_admin_password: $(TF_VAR_admin_password)
+
+          # Display plan preview
+          - script: |
+              echo "==> Human-readable preview of resources to be destroyed:"
+              terraform show "$(Build.ArtifactStagingDirectory)/destroy.tfplan" > "$(Build.ArtifactStagingDirectory)/destroy-summary.txt"
+              cat "$(Build.ArtifactStagingDirectory)/destroy-summary.txt" | head -n 100
+            displayName: 'Preview Destroy Summary'
+            workingDirectory: $(terraformWorkingDirectory)
+
+          # Stage Terraform files and destroy plan artifact
+          - task: CopyFiles@2
+            displayName: 'Stage Terraform Files'
+            inputs:
+              SourceFolder: '$(terraformWorkingDirectory)'
+              Contents: |
+                **/*
+                !**/.terraform/**
+              TargetFolder: '$(Build.ArtifactStagingDirectory)/tfcode'
+
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish Destroy Plan Artifact'
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)'
+              artifact: 'terraform-destroy-drop'
+              publishLocation: 'pipeline'
+
+  # ==============================================================================
+  # STAGE 2: APPLY DESTROY (Tear down infrastructure in Azure)
+  # ==============================================================================
+  - stage: DestroyApply
+    displayName: 'Stage: Execute Teardown'
+    dependsOn: DestroyPlan
+    condition: succeeded()
+    jobs:
+      - deployment: TerraformDestroyApply
+        displayName: 'Destroy Infrastructure'
+        environment: 'infra-${{ parameters.environment }}'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: current
+                  artifact: 'terraform-destroy-drop'
+
+                # Install Terraform CLI
+                - script: |
+                    if ! command -v terraform &> /dev/null || ! terraform version | grep -q "$(terraformVersion)"; then
+                      echo "==> Downloading Terraform $(terraformVersion)..."
+                      curl -s -L -o /tmp/terraform.zip "https://releases.hashicorp.com/terraform/$(terraformVersion)/terraform_$(terraformVersion)_linux_amd64.zip"
+                      sudo unzip -q -o /tmp/terraform.zip -d /usr/local/bin
+                      rm -f /tmp/terraform.zip
+                    fi
+                    terraform version
+                  displayName: 'Install Terraform CLI'
+
+                # Initialize Terraform with remote state
+                - script: |
+                    echo "==> Initializing Terraform with remote state..."
+                    cd $(Pipeline.Workspace)/terraform-destroy-drop/tfcode
+                    terraform init
+                  displayName: 'Terraform Init'
+                  env:
+                    ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                    ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                    ARM_TENANT_ID: $(ARM_TENANT_ID)
+                    ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+
+                # Execute Destroy using compiled plan
+                - script: |
+                    cd $(Pipeline.Workspace)/terraform-destroy-drop/tfcode
+                    echo "=========================================================="
+                    echo "        EXECUTING TERRAFORM INFRASTRUCTURE TEARDOWN        "
+                    echo "=========================================================="
+                    terraform apply \
+                      -auto-approve \
+                      "$(Pipeline.Workspace)/terraform-destroy-drop/destroy.tfplan"
+                    echo "=========================================================="
+                    echo "   TEARDOWN COMPLETE FOR ENVIRONMENT: ${{ parameters.environment }}   "
+                    echo "=========================================================="
+                  displayName: 'Execute Terraform Destroy'
+                  env:
+                    ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+                    ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+                    ARM_TENANT_ID: $(ARM_TENANT_ID)
+                    ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+                    TF_VAR_admin_password: $(TF_VAR_admin_password)

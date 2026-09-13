@@ -109,6 +109,13 @@ flowchart LR
    - Executes `terraform apply` using the validated `tfplan`.
    - Prints connection details and public IPs to the deployment log.
 
+### Destroy Pipeline (`destroy-pipeline.yml`)
+A dedicated pipeline is provided to safely tear down all provisioned resources on demand:
+- **No Automatic Triggers**: `trigger: none` and `pr: none` to prevent accidental executions.
+- **Parameters**: Select target environment (`dev`, `staging`, `prod`) and confirm teardown by typing `DESTROY`.
+- **Stage 1 (Plan Destroy)**: Generates a destroy execution plan (`terraform plan -destroy`) and displays a preview of resources to be deleted.
+- **Stage 2 (Execute Teardown)**: Uses Azure DevOps Environment gates and applies the compiled destroy plan to cleanly tear down infrastructure.
+
 ---
 
 ## 🔑 Authentication Setup (Client ID & Client Secret)
