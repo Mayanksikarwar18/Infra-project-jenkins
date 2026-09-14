@@ -194,18 +194,34 @@ pipeline {
         }
 
         stage('Terraform Output') {
-            when {
-                expression {
-                    params.ACTION == 'apply'
-                }
-            }
+    when {
+        expression {
+            params.ACTION == 'apply'
+        }
+    }
 
-            steps {
-                dir("${TF_DIR}") {
-                    bat 'terraform output'
-                }
+    steps {
+        withCredentials([
+            usernamePassword(
+                credentialsId: 'azure-sp-credentials',
+                usernameVariable: 'ARM_CLIENT_ID',
+                passwordVariable: 'ARM_CLIENT_SECRET'
+            ),
+            string(
+                credentialsId: 'azure-tenant-id',
+                variable: 'ARM_TENANT_ID'
+            ),
+            string(
+                credentialsId: 'azure-subscription-id',
+                variable: 'ARM_SUBSCRIPTION_ID'
+            )
+        ]) {
+            dir("${TF_DIR}") {
+                bat 'terraform output'
             }
         }
+    }
+}
     }
 
     post {
