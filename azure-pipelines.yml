@@ -3,7 +3,7 @@ name: $(Date:yyyyMMdd)$(Rev:.r)
 trigger:
   branches:
     include:
-      - master
+      - 
       - develop
   paths:
     include:
@@ -12,7 +12,7 @@ trigger:
 pr:
   branches:
     include:
-      - master
+      - main
   paths:
     include:
       - terraform/**
@@ -235,8 +235,8 @@ stages:
   - stage: Deploy
     displayName: 'Stage: Deploy Infrastructure'
     dependsOn: Test
-    # Only deploy on master branch commits or manual dispatch
-    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/master'), eq(variables['Build.Reason'], 'Manual')))
+    # Only deploy on main branch commits or manual dispatch
+    condition: and(succeeded(), or(eq(variables['Build.SourceBranch'], 'refs/heads/main'), eq(variables['Build.Reason'], 'Manual')))
     jobs:
       - deployment: TerraformApply
         displayName: 'Apply Terraform Changes'
