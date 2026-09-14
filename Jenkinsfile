@@ -98,7 +98,7 @@ pipeline {
                     dir("${TF_DIR}") {
                         bat """
                             terraform plan ^
-                            -var-file="environments\\${ENVIRONMENT}.tfvars" ^
+                            -var-file="environments\\${params.ENVIRONMENT}.tfvars" ^
                             -out="tfplan"
                         """
                     }
@@ -185,7 +185,7 @@ pipeline {
                     dir("${TF_DIR}") {
                         bat """
                             terraform destroy ^
-                            -var-file="environments\\${ENVIRONMENT}.tfvars" ^
+                            -var-file="environments\\${params.ENVIRONMENT}.tfvars" ^
                             -auto-approve
                         """
                     }
